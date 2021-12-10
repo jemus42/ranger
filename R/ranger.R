@@ -98,7 +98,7 @@
 ##' @param sample.fraction Fraction of observations to sample. Default is 1 for sampling with replacement and 0.632 for sampling without replacement. For classification, this can be a vector of class-specific values. 
 ##' @param case.weights Weights for sampling of training observations. Observations with larger weights will be selected with higher probability in the bootstrap (or subsampled) samples for the trees.
 ##' @param class.weights Weights for the outcome classes (in order of the factor levels) in the splitting rule (cost sensitive learning). Classification and probability prediction only. For classification the weights are also applied in the majority vote in terminal nodes.
-##' @param splitrule Splitting rule. For classification and probability estimation "gini", "extratrees" or "hellinger" with default "gini". For regression "variance", "extratrees", "maxstat" or "beta" with default "variance". For survival "logrank", "extratrees", "C", "maxstat", or "graf" with default "logrank". 
+##' @param splitrule Splitting rule. For classification and probability estimation "gini", "extratrees" or "hellinger" with default "gini". For regression "variance", "extratrees", "maxstat" or "beta" with default "variance". For survival "logrank", "extratrees", "C", "maxstat", or "brier" with default "logrank". 
 ##' @param num.random.splits For "extratrees" splitrule.: Number of random splits to consider for each candidate splitting variable.
 ##' @param alpha For "maxstat" splitrule: Significance threshold to allow splitting.
 ##' @param minprop For "maxstat" splitrule: Lower quantile of covariate distribution to be considered for splitting.
@@ -688,11 +688,11 @@ ranger <- function(formula = NULL, data = NULL, num.trees = 500, mtry = NULL,
     } else {
       stop("Error: logrank splitrule applicable to survival data only.")
     }
-  } else if (splitrule == "graf") {
+  } else if (splitrule == "brier") {
     if (treetype == 5) {
       splitrule.num <- 8
     } else {
-      stop("Error: Graf splitrule applicable to survival data only.")
+      stop("Error: Brier splitrule applicable to survival data only.")
     }
   } else if (splitrule == "gini") {
     if (treetype %in% c(1, 9)) {

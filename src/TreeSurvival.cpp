@@ -146,9 +146,9 @@ bool TreeSurvival::findBestSplit(size_t nodeID, std::vector<size_t>& possible_sp
         } else if (splitrule == AUC || splitrule == AUC_IGNORE_TIES) {
           findBestSplitValueAUC(nodeID, varID, best_value, best_varID, best_decrease);
         }
-        else if (splitrule == GRAF)
+        else if (splitrule == BRIER)
         {
-          findBestSplitValueGraf(nodeID, varID, best_value, best_varID, best_decrease);
+          findBestSplitValueBrier(nodeID, varID, best_value, best_varID, best_decrease);
         }
       } else {
         findBestSplitValueLogRankUnordered(nodeID, varID, best_value, best_varID, best_decrease);
@@ -156,9 +156,9 @@ bool TreeSurvival::findBestSplit(size_t nodeID, std::vector<size_t>& possible_sp
         {
           findBestSplitValueLogRankUnordered(nodeID, varID, best_value, best_varID, best_decrease);
         }
-        else if (splitrule == GRAF)
+        else if (splitrule == BRIER)
         {
-          findBestSplitValueGrafUnordered(nodeID, varID, best_value, best_varID, best_decrease);
+          findBestSplitValueBrierUnordered(nodeID, varID, best_value, best_varID, best_decrease);
         }
       }
     }
@@ -541,7 +541,7 @@ void TreeSurvival::findBestSplitValueLogRankUnordered(size_t nodeID, size_t varI
   }
 }
 
-void TreeSurvival::findBestSplitValueGraf(size_t nodeID, size_t varID, double &best_value, size_t &best_varID,
+void TreeSurvival::findBestSplitValueBrier(size_t nodeID, size_t varID, double &best_value, size_t &best_varID,
                                              double &best_logrank)
 {
 
@@ -628,7 +628,7 @@ void TreeSurvival::findBestSplitValueGraf(size_t nodeID, size_t varID, double &b
   }
 }
 
-void TreeSurvival::findBestSplitValueGrafUnordered(size_t nodeID, size_t varID, double &best_value,
+void TreeSurvival::findBestSplitValueBrierUnordered(size_t nodeID, size_t varID, double &best_value,
                                                       size_t &best_varID, double &best_logrank)
 {
 

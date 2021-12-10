@@ -70,7 +70,7 @@ enum SplitRule {
   EXTRATREES = 5,
   BETA = 6,
   HELLINGER = 7,
-  GRAF = 8
+  BRIER = 8
 };
 
 // Prediction type

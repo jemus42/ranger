@@ -82,9 +82,9 @@ private:
   void findBestSplitValueLogRankUnordered(size_t nodeID, size_t varID, double& best_value, size_t& best_varID,
       double& best_logrank);
 
-  void findBestSplitValueGraf(size_t nodeID, size_t varID, double &best_value, size_t &best_varID,
+  void findBestSplitValueBrier(size_t nodeID, size_t varID, double &best_value, size_t &best_varID,
       double &best_logrank);
-  void findBestSplitValueGrafUnordered(size_t nodeID, size_t varID, double &best_value, size_t &best_varID,
+  void findBestSplitValueBrierUnordered(size_t nodeID, size_t varID, double &best_value, size_t &best_varID,
       double &best_logrank);
 
   bool findBestSplitExtraTrees(size_t nodeID, std::vector<size_t>& possible_split_varIDs);
