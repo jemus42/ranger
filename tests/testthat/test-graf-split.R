@@ -10,7 +10,7 @@ test_that("Graf splitting is callable", {
     ranger(
       Surv(time, status) ~ .,
       data = veteran,
-      splitrule = "graf",
+      splitrule = "brier",
       num.trees = 10
     )
   ))
