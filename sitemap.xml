@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
+    <loc>https://imbs-hl.github.io/ranger/404.html</loc>
+  </url>
+  <url>
+    <loc>https://imbs-hl.github.io/ranger/authors.html</loc>
+  </url>
+  <url>
     <loc>https://imbs-hl.github.io/ranger/index.html</loc>
   </url>
   <url>
+    <loc>https://imbs-hl.github.io/ranger/news/index.html</loc>
+  </url>
+  <url>
     <loc>https://imbs-hl.github.io/ranger/reference/csrf.html</loc>
+  </url>
+  <url>
+    <loc>https://imbs-hl.github.io/ranger/reference/deforest.html</loc>
   </url>
   <url>
     <loc>https://imbs-hl.github.io/ranger/reference/getTerminalNodeIDs.html</loc>
@@ -19,13 +31,16 @@
     <loc>https://imbs-hl.github.io/ranger/reference/importance_pvalues.html</loc>
   </url>
   <url>
+    <loc>https://imbs-hl.github.io/ranger/reference/index.html</loc>
+  </url>
+  <url>
     <loc>https://imbs-hl.github.io/ranger/reference/parse.formula.html</loc>
   </url>
   <url>
-    <loc>https://imbs-hl.github.io/ranger/reference/predict.ranger.html</loc>
+    <loc>https://imbs-hl.github.io/ranger/reference/predict.ranger.forest.html</loc>
   </url>
   <url>
-    <loc>https://imbs-hl.github.io/ranger/reference/predict.ranger.forest.html</loc>
+    <loc>https://imbs-hl.github.io/ranger/reference/predict.ranger.html</loc>
   </url>
   <url>
     <loc>https://imbs-hl.github.io/ranger/reference/predictions.ranger.html</loc>
@@ -34,10 +49,13 @@
     <loc>https://imbs-hl.github.io/ranger/reference/predictions.ranger.prediction.html</loc>
   </url>
   <url>
-    <loc>https://imbs-hl.github.io/ranger/reference/print.ranger.html</loc>
+    <loc>https://imbs-hl.github.io/ranger/reference/print.deforest.ranger.html</loc>
   </url>
   <url>
     <loc>https://imbs-hl.github.io/ranger/reference/print.ranger.forest.html</loc>
+  </url>
+  <url>
+    <loc>https://imbs-hl.github.io/ranger/reference/print.ranger.html</loc>
   </url>
   <url>
     <loc>https://imbs-hl.github.io/ranger/reference/print.ranger.prediction.html</loc>
