@@ -49,8 +49,9 @@ Object of class \code{ranger.prediction} with elements
   \tabular{ll}{
       \code{predictions}    \tab Predicted classes/values (only for classification and regression)  \cr
       \code{unique.death.times} \tab Unique death times (only for survival). \cr
-      \code{chf} \tab Estimated cumulative hazard function for each sample (only for survival). \cr
-      \code{survival} \tab Estimated survival function for each sample (only for survival). \cr
+      \code{chf} \tab Estimated cumulative hazard function for each sample (only for survival). For competing risks, a list of matrices, one per event type. \cr
+      \code{survival} \tab Estimated survival function for each sample (only for survival, not for competing risks). \cr
+      \code{cif} \tab Estimated cumulative incidence function for each sample (only for competing risks). A list of matrices, one per event type. \cr
       \code{num.trees}   \tab Number of trees. \cr
       \code{num.independent.variables} \tab Number of independent variables. \cr
       \code{treetype}    \tab Type of forest/tree. Classification, regression or survival. \cr

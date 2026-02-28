@@ -29,7 +29,7 @@
 ##' Ranger is a fast implementation of random forests (Breiman 2001) or recursive partitioning, particularly suited for high dimensional data.
 ##' Classification, regression, and survival forests are supported.
 ##' Classification and regression forests are implemented as in the original Random Forest (Breiman 2001), survival forests as in Random Survival Forests (Ishwaran et al. 2008).
-##' Includes implementations of extremely randomized trees (Geurts et al. 2006) and quantile regression forests (Meinshausen 2006). 
+##' Includes implementations of extremely randomized trees (Geurts et al. 2006) and quantile regression forests (Meinshausen 2006).
 ##'
 ##' The tree type is determined by the type of the dependent variable.
 ##' For factors classification trees are grown, for numeric values regression trees and for survival objects survival trees.
@@ -37,6 +37,12 @@
 ##' For regression, the estimated response variances or maximally selected rank statistics (Wright et al. 2016) can be used.
 ##' For Survival the log-rank test, a C-index based splitting rule (Schmid et al. 2015) and maximally selected rank statistics (Wright et al. 2016) are available.
 ##' For all tree types, forests of extremely randomized trees (Geurts et al. 2006) can be grown.
+##'
+##' Competing risks survival forests are supported for status variables with more than one event type (status = 0 for censoring, 1, 2, ..., K for K event types).
+##' The implementation follows the cause-specific hazard approach of Ishwaran et al. (2014), similar to the \code{randomForestSRC} package.
+##' Splitting uses a weighted composite of cause-specific log-rank statistics across all event types.
+##' Predictions include cause-specific cumulative hazard functions (CHF) and cumulative incidence functions (CIF) estimated via the Aalen-Johansen estimator.
+##' See the \code{competing_risks} vignette for details and examples.
 ##'
 ##' With the \code{probability} option and factor dependent variable a probability forest is grown.
 ##' Here, the node impurity is used for splitting, as in classification forests.
@@ -122,7 +128,7 @@
 ##' @param class.weights Weights for the outcome classes (in order of the factor levels) in the splitting rule (cost sensitive learning). Classification and probability prediction only. For classification the weights are also applied in the majority vote in terminal nodes.
 ##' @param splitrule Splitting rule. For classification and probability estimation "gini", "extratrees" or "hellinger" with default "gini".
 ##'   For regression "variance", "extratrees", "maxstat", "beta" or "poisson" with default "variance".
-##'   For survival "logrank", "extratrees", "C" or "maxstat" with default "logrank". 
+##'   For survival "logrank", "extratrees", "C" or "maxstat" with default "logrank". For competing risks, "C" is not supported.
 ##' @param num.random.splits For "extratrees" splitrule.: Number of random splits to consider for each candidate splitting variable.
 ##' @param alpha For "maxstat" splitrule: Significance threshold to allow splitting.
 ##' @param minprop For "maxstat" splitrule: Lower quantile of covariate distribution to be considered for splitting.
@@ -148,10 +154,10 @@
 ##' @param seed Random seed. Default is \code{NULL}, which generates the seed from \code{R}. Set to \code{0} to ignore the \code{R} seed. 
 ##' @param na.action Handling of missing values. Set to "na.learn" to internally handle missing values (default, see below), to "na.omit" to omit observations with missing values and to "na.fail" to stop if missing values are found.
 ##' @param dependent.variable.name Name of dependent variable, needed if no formula given. For survival forests this is the time variable.
-##' @param status.variable.name Name of status variable, only applicable to survival data and needed if no formula given. Use 1 for event and 0 for censoring.
+##' @param status.variable.name Name of status variable, only applicable to survival data and needed if no formula given. Use 1 for event and 0 for censoring. For competing risks, use 0 for censoring and 1, 2, ..., K for K event types.
 ##' @param classification Set to \code{TRUE} to grow a classification forest. Only needed if the data is a matrix or the response numeric. 
 ##' @param x Predictor data (independent variables), alternative interface to data with formula or dependent.variable.name.
-##' @param y Response vector (dependent variable), alternative interface to data with formula or dependent.variable.name. For survival use a \code{Surv()} object or a matrix with time and status.
+##' @param y Response vector (dependent variable), alternative interface to data with formula or dependent.variable.name. For survival use a \code{Surv()} object or a matrix with time and status. For competing risks, status values should be 0 (censored) or 1, 2, ..., K for K event types.
 ##' @param ... Further arguments passed to or from other methods (currently ignored).
 ##' @return Object of class \code{ranger} with elements
 ##'   \item{\code{forest}}{Saved forest (If write.forest set to TRUE). Note that the variable IDs in the \code{split.varIDs} object do not necessarily represent the column number in R.}
@@ -162,8 +168,10 @@
 ##'   \item{\code{r.squared}}{R squared. Also called explained variance or coefficient of determination (regression only). Computed on out-of-bag data.}
 ##'   \item{\code{confusion.matrix}}{Contingency table for classes and predictions based on out-of-bag samples (classification only).}
 ##'   \item{\code{unique.death.times}}{Unique death times (survival only).}
-##'   \item{\code{chf}}{Estimated cumulative hazard function for each sample (survival only).}
-##'   \item{\code{survival}}{Estimated survival function for each sample (survival only).}
+##'   \item{\code{chf}}{Estimated cumulative hazard function for each sample (survival only). For competing risks, a list of matrices, one per event type.}
+##'   \item{\code{survival}}{Estimated survival function for each sample (survival only). Not returned for competing risks.}
+##'   \item{\code{cif}}{Estimated cumulative incidence function for each sample (competing risks only). A list of matrices, one per event type, computed via the Aalen-Johansen estimator.}
+##'   \item{\code{num.event.types}}{Number of competing event types (survival only, 1 for standard survival).}
 ##'   \item{\code{call}}{Function call.}
 ##'   \item{\code{num.trees}}{Number of trees.}
 ##'   \item{\code{num.independent.variables}}{Number of independent variables.}
@@ -201,6 +209,15 @@
 ##' rg.veteran <- ranger(Surv(time, status) ~ ., data = veteran)
 ##' plot(rg.veteran$unique.death.times, rg.veteran$survival[1,])
 ##'
+##' ## Competing risks survival forest
+##' ## Status: 0 = censored, 1 = event type 1, 2 = event type 2
+##' require(survival)
+##' dat_cr <- data.frame(time = rexp(100), status = sample(0:2, 100, replace = TRUE),
+##'                      x1 = rnorm(100), x2 = rnorm(100))
+##' rg.cr <- ranger(Surv(time, status) ~ ., data = dat_cr)
+##' rg.cr$num.event.types
+##' rg.cr$cif  ## list of CIF matrices, one per event type
+##'
 ##' ## Alternative interfaces (same results)
 ##' ranger(dependent.variable.name = "Species", data = iris)
 ##' ranger(y = iris[, 5], x = iris[, -5])
@@ -223,7 +240,8 @@
 ##'   \item Wright, M. N., Dankowski, T. & Ziegler, A. (2017). Unbiased split variable selection for random survival forests using maximally selected rank statistics. Stat Med 36:1272-1284. \doi{10.1002/sim.7212}.
 ##'   \item Nembrini, S., Koenig, I. R. & Wright, M. N. (2018). The revival of the Gini Importance? Bioinformatics. \doi{10.1093/bioinformatics/bty373}.
 ##'   \item Breiman, L. (2001). Random forests. Mach Learn, 45:5-32. \doi{10.1023/A:1010933404324}. 
-##'   \item Ishwaran, H., Kogalur, U. B., Blackstone, E. H., & Lauer, M. S. (2008). Random survival forests. Ann Appl Stat 2:841-860. \doi{10.1097/JTO.0b013e318233d835}. 
+##'   \item Ishwaran, H., Kogalur, U. B., Blackstone, E. H., & Lauer, M. S. (2008). Random survival forests. Ann Appl Stat 2:841-860. \doi{10.1097/JTO.0b013e318233d835}.
+##'   \item Ishwaran, H., Gerds, T. A., Kogalur, U. B., Moore, R. D., Gange, S. J. & Lau, B. M. (2014). Random survival forests for competing risks. Biostatistics 15:757-773. \doi{10.1093/biostatistics/kxu010}.
 ##'   \item Malley, J. D., Kruppa, J., Dasgupta, A., Malley, K. G., & Ziegler, A. (2012). Probability machines: consistent probability estimation using nonparametric learning machines. Methods Inf Med 51:74-81. \doi{10.3414/ME00-01-0052}.
 ##'   \item Hastie, T., Tibshirani, R., Friedman, J. (2009). The Elements of Statistical Learning. Springer, New York. 2nd edition.
 ##'   \item Geurts, P., Ernst, D., Wehenkel, L. (2006). Extremely randomized trees. Mach Learn 63:3-42. \doi{10.1007/s10994-006-6226-1}.
