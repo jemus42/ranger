@@ -34,13 +34,24 @@ public:
       std::vector<std::vector<size_t>>& forest_split_varIDs, std::vector<std::vector<double>>& forest_split_values,
       std::vector<std::vector<std::vector<double>> >& forest_chf, std::vector<double>& unique_timepoints,
       std::vector<bool>& is_ordered_variable);
-  
+
   void setUniqueTimepoints(const std::vector<double>& time_interest);
+
+  void setNumEventTypes(size_t num_event_types) {
+    this->num_event_types = num_event_types;
+  }
+  void setCauseWeights(const std::vector<double>& cause_weights) {
+    this->cause_weights = cause_weights;
+  }
 
   std::vector<std::vector<std::vector<double>>> getChf() const;
 
   const std::vector<double>& getUniqueTimepoints() const {
     return unique_timepoints;
+  }
+
+  size_t getNumEventTypes() const {
+    return num_event_types;
   }
 
 private:
@@ -57,6 +68,8 @@ private:
 
   std::vector<double> unique_timepoints;
   std::vector<size_t> response_timepointIDs;
+  size_t num_event_types = 1;
+  std::vector<double> cause_weights;
 
 private:
   const std::vector<double>& getTreePrediction(size_t tree_idx, size_t sample_idx) const;

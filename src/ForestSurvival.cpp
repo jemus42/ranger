@@ -30,12 +30,28 @@ void ForestSurvival::loadForest(size_t num_trees, std::vector<std::vector<std::v
   this->unique_timepoints = unique_timepoints;
   data->setIsOrderedVariable(is_ordered_variable);
 
+  // Detect num_event_types from CHF size vs timepoints
+  if (!forest_chf.empty()) {
+    for (const auto& tree_chf : forest_chf) {
+      for (const auto& node_chf : tree_chf) {
+        if (!node_chf.empty()) {
+          num_event_types = node_chf.size() / unique_timepoints.size();
+          break;
+        }
+      }
+      if (num_event_types > 1) break;
+    }
+  }
+  if (num_event_types < 1) {
+    num_event_types = 1;
+  }
+
   // Create trees
   trees.reserve(num_trees);
   for (size_t i = 0; i < num_trees; ++i) {
     trees.push_back(
         std::make_unique<TreeSurvival>(forest_child_nodeIDs[i], forest_split_varIDs[i], forest_split_values[i],
-            forest_chf[i], &this->unique_timepoints, &response_timepointIDs));
+            forest_chf[i], &this->unique_timepoints, &response_timepointIDs, num_event_types));
   }
 
   // Create thread ranges
@@ -107,6 +123,23 @@ void ForestSurvival::initInternal() {
     min_bucket[0] = DEFAULT_MIN_BUCKET_SURVIVAL;
   }
 
+  // Detect number of event types from data if not already set (only in grow mode)
+  if (!prediction_mode && num_event_types <= 1) {
+    double max_status = 0;
+    for (size_t i = 0; i < num_samples; ++i) {
+      double status = data->get_y(i, 1);
+      if (status > max_status) {
+        max_status = status;
+      }
+    }
+    num_event_types = std::max((size_t) 1, (size_t) max_status);
+  }
+
+  // Initialize cause weights to equal if not set
+  if (cause_weights.empty()) {
+    cause_weights.resize(num_event_types, 1.0);
+  }
+
   // Sort data if extratrees and not memory saving mode
   if (splitrule == EXTRATREES && !memory_saving_splitting) {
     data->sort();
@@ -114,16 +147,16 @@ void ForestSurvival::initInternal() {
 }
 
 void ForestSurvival::growInternal() {
-  
+
   // If unique time points not set, use observed times
   if (unique_timepoints.empty()) {
     setUniqueTimepoints(std::vector<double>());
   }
-  
-  
+
   trees.reserve(num_trees);
   for (size_t i = 0; i < num_trees; ++i) {
-    trees.push_back(std::make_unique<TreeSurvival>(&unique_timepoints, &response_timepointIDs));
+    trees.push_back(std::make_unique<TreeSurvival>(&unique_timepoints, &response_timepointIDs,
+        num_event_types, &cause_weights));
   }
 }
 
@@ -132,20 +165,22 @@ void ForestSurvival::allocatePredictMemory() {
   size_t num_timepoints = unique_timepoints.size();
   if (predict_all) {
     predictions = std::vector<std::vector<std::vector<double>>>(num_prediction_samples,
-        std::vector<std::vector<double>>(num_timepoints, std::vector<double>(num_trees, 0)));
+        std::vector<std::vector<double>>(num_event_types * num_timepoints, std::vector<double>(num_trees, 0)));
   } else if (prediction_type == TERMINALNODES) {
     predictions = std::vector<std::vector<std::vector<double>>>(1,
         std::vector<std::vector<double>>(num_prediction_samples, std::vector<double>(num_trees, 0)));
   } else {
     predictions = std::vector<std::vector<std::vector<double>>>(1,
-        std::vector<std::vector<double>>(num_prediction_samples, std::vector<double>(num_timepoints, 0)));
+        std::vector<std::vector<double>>(num_prediction_samples, std::vector<double>(num_event_types * num_timepoints, 0)));
   }
 }
 
 void ForestSurvival::predictInternal(size_t sample_idx) {
-  // For each timepoint sum over trees
+  size_t num_timepoints = unique_timepoints.size();
+
+  // For each timepoint and event type sum over trees
   if (predict_all) {
-    for (size_t j = 0; j < unique_timepoints.size(); ++j) {
+    for (size_t j = 0; j < num_event_types * num_timepoints; ++j) {
       for (size_t k = 0; k < num_trees; ++k) {
         predictions[sample_idx][j][k] = getTreePrediction(k, sample_idx)[j];
       }
@@ -155,7 +190,7 @@ void ForestSurvival::predictInternal(size_t sample_idx) {
       predictions[0][sample_idx][k] = getTreePredictionTerminalNodeID(k, sample_idx);
     }
   } else {
-    for (size_t j = 0; j < unique_timepoints.size(); ++j) {
+    for (size_t j = 0; j < num_event_types * num_timepoints; ++j) {
       double sample_time_prediction = 0;
       for (size_t k = 0; k < num_trees; ++k) {
         sample_time_prediction += getTreePrediction(k, sample_idx)[j];
@@ -168,12 +203,13 @@ void ForestSurvival::predictInternal(size_t sample_idx) {
 void ForestSurvival::computePredictionErrorInternal() {
 
   size_t num_timepoints = unique_timepoints.size();
+  size_t total_chf_size = num_event_types * num_timepoints;
 
   // For each sample sum over trees where sample is OOB
   std::vector<size_t> samples_oob_count;
   samples_oob_count.resize(num_samples, 0);
   predictions = std::vector<std::vector<std::vector<double>>>(1,
-      std::vector<std::vector<double>>(num_samples, std::vector<double>(num_timepoints, 0)));
+      std::vector<std::vector<double>>(num_samples, std::vector<double>(total_chf_size, 0)));
 
   for (size_t tree_idx = 0; tree_idx < num_trees; ++tree_idx) {
     for (size_t sample_idx = 0; sample_idx < trees[tree_idx]->getNumSamplesOob(); ++sample_idx) {
@@ -187,17 +223,20 @@ void ForestSurvival::computePredictionErrorInternal() {
     }
   }
 
-  // Divide sample predictions by number of trees where sample is oob and compute summed chf for samples
+  // Divide sample predictions by number of trees where sample is oob and compute summed chf for first event type
   std::vector<double> sum_chf;
   sum_chf.reserve(predictions[0].size());
   std::vector<size_t> oob_sampleIDs;
   oob_sampleIDs.reserve(predictions[0].size());
   for (size_t i = 0; i < predictions[0].size(); ++i) {
     if (samples_oob_count[i] > 0) {
-      double sum = 0;
       for (size_t j = 0; j < predictions[0][i].size(); ++j) {
         predictions[0][i][j] /= samples_oob_count[i];
-        sum += predictions[0][i][j];
+      }
+      // Sum CHF for first event type only (indices 0..num_timepoints-1) for concordance
+      double sum = 0;
+      for (size_t t = 0; t < num_timepoints; ++t) {
+        sum += predictions[0][i][t];
       }
       sum_chf.push_back(sum);
       oob_sampleIDs.push_back(i);

@@ -21,23 +21,26 @@
 
 namespace ranger {
 
-TreeSurvival::TreeSurvival(std::vector<double>* unique_timepoints, std::vector<size_t>* response_timepointIDs) :
-    unique_timepoints(unique_timepoints), response_timepointIDs(response_timepointIDs), num_deaths(0), num_samples_at_risk(
-        0) {
+TreeSurvival::TreeSurvival(std::vector<double>* unique_timepoints, std::vector<size_t>* response_timepointIDs,
+    size_t num_event_types, const std::vector<double>* cause_weights) :
+    unique_timepoints(unique_timepoints), response_timepointIDs(response_timepointIDs),
+    num_event_types(num_event_types), cause_weights(cause_weights),
+    num_samples_at_risk(0) {
   this->num_timepoints = unique_timepoints->size();
 }
 
 TreeSurvival::TreeSurvival(std::vector<std::vector<size_t>>& child_nodeIDs, std::vector<size_t>& split_varIDs,
     std::vector<double>& split_values, std::vector<std::vector<double>> chf, std::vector<double>* unique_timepoints,
-    std::vector<size_t>* response_timepointIDs) :
+    std::vector<size_t>* response_timepointIDs, size_t num_event_types) :
     Tree(child_nodeIDs, split_varIDs, split_values), unique_timepoints(unique_timepoints), response_timepointIDs(
-        response_timepointIDs), chf(chf), num_deaths(0), num_samples_at_risk(0) {
+        response_timepointIDs), chf(chf), num_event_types(num_event_types), cause_weights(nullptr),
+    num_samples_at_risk(0) {
   this->num_timepoints = unique_timepoints->size();
 }
 
 void TreeSurvival::allocateMemory() {
-  // Number of deaths and samples at risk for each timepoint
-  num_deaths.resize(num_timepoints);
+  // Number of deaths per event type and samples at risk for each timepoint
+  num_deaths.resize(num_event_types, std::vector<size_t>(num_timepoints, 0));
   num_samples_at_risk.resize(num_timepoints);
 }
 
@@ -62,24 +65,32 @@ void TreeSurvival::createEmptyNodeInternal() {
 
 void TreeSurvival::computeSurvival(size_t nodeID) {
   std::vector<double> chf_temp;
-  chf_temp.reserve(num_timepoints);
-  double chf_value = 0;
-  for (size_t i = 0; i < num_timepoints; ++i) {
-    if (num_samples_at_risk[i] != 0) {
-      chf_value += (double) num_deaths[i] / (double) num_samples_at_risk[i];
+  chf_temp.reserve(num_event_types * num_timepoints);
+  for (size_t e = 0; e < num_event_types; ++e) {
+    double chf_value = 0;
+    for (size_t t = 0; t < num_timepoints; ++t) {
+      if (num_samples_at_risk[t] != 0) {
+        chf_value += (double) num_deaths[e][t] / (double) num_samples_at_risk[t];
+      }
+      chf_temp.push_back(chf_value);
     }
-    chf_temp.push_back(chf_value);
   }
   chf[nodeID] = chf_temp;
 }
 
 double TreeSurvival::computePredictionAccuracyInternal(std::vector<double>* prediction_error_casewise) {
 
-  // Compute summed chf for samples
+  // Compute summed chf for samples (use first event type only for concordance)
   std::vector<double> sum_chf;
   for (size_t i = 0; i < prediction_terminal_nodeIDs.size(); ++i) {
     size_t terminal_nodeID = prediction_terminal_nodeIDs[i];
-    sum_chf.push_back(std::accumulate(chf[terminal_nodeID].begin(), chf[terminal_nodeID].end(), 0.0));
+    const auto& node_chf = chf[terminal_nodeID];
+    // Sum only the first event type's CHF (indices 0..num_timepoints-1)
+    double sum = 0;
+    for (size_t t = 0; t < num_timepoints; ++t) {
+      sum += node_chf[t];
+    }
+    sum_chf.push_back(sum);
   }
 
   // Return concordance index
@@ -331,9 +342,13 @@ bool TreeSurvival::findBestSplitMaxstat(size_t nodeID, std::vector<size_t>& poss
 void TreeSurvival::computeDeathCounts(size_t nodeID) {
 
   // Initialize
-  for (size_t i = 0; i < num_timepoints; ++i) {
-    num_deaths[i] = 0;
-    num_samples_at_risk[i] = 0;
+  for (size_t e = 0; e < num_event_types; ++e) {
+    for (size_t t = 0; t < num_timepoints; ++t) {
+      num_deaths[e][t] = 0;
+    }
+  }
+  for (size_t t = 0; t < num_timepoints; ++t) {
+    num_samples_at_risk[t] = 0;
   }
 
   for (size_t pos = start_pos[nodeID]; pos < end_pos[nodeID]; ++pos) {
@@ -346,11 +361,13 @@ void TreeSurvival::computeDeathCounts(size_t nodeID) {
       ++t;
     }
 
-    // Now t is the survival time, add to at risk and to death if death
+    // Now t is the survival time, add to at risk and to death if event
     if (t < num_timepoints) {
       ++num_samples_at_risk[t];
-      if (data->get_y(sampleID, 1) == 1) {
-        ++num_deaths[t];
+      double status = data->get_y(sampleID, 1);
+      if (status > 0) {
+        size_t event_type = (size_t) status - 1;
+        ++num_deaths[event_type][t];
       }
     }
   }
@@ -358,13 +375,14 @@ void TreeSurvival::computeDeathCounts(size_t nodeID) {
 
 void TreeSurvival::computeChildDeathCounts(size_t nodeID, size_t varID, std::vector<double>& possible_split_values,
     std::vector<size_t>& num_samples_right_child, std::vector<size_t>& delta_samples_at_risk_right_child,
-    std::vector<size_t>& num_deaths_right_child, size_t num_splits) {
+    std::vector<std::vector<size_t>>& num_deaths_right_child, size_t num_splits) {
 
-  // Count deaths in right child per timepoint and possbile split
+  // Count deaths in right child per timepoint and possible split
   for (size_t pos = start_pos[nodeID]; pos < end_pos[nodeID]; ++pos) {
     size_t sampleID = sampleIDs[pos];
     double value = data->get_x(sampleID, varID);
     size_t survival_timeID = (*response_timepointIDs)[sampleID];
+    double status = data->get_y(sampleID, 1);
 
     // Count deaths until split_value reached
     for (size_t i = 0; i < num_splits; ++i) {
@@ -372,14 +390,106 @@ void TreeSurvival::computeChildDeathCounts(size_t nodeID, size_t varID, std::vec
       if (value > possible_split_values[i]) {
         ++num_samples_right_child[i];
         ++delta_samples_at_risk_right_child[i * num_timepoints + survival_timeID];
-        if (data->get_y(sampleID, 1) == 1) {
-          ++num_deaths_right_child[i * num_timepoints + survival_timeID];
+        if (status > 0) {
+          size_t event_type = (size_t) status - 1;
+          ++num_deaths_right_child[event_type][i * num_timepoints + survival_timeID];
         }
       } else {
         break;
       }
     }
   }
+}
+
+double TreeSurvival::computeLogRankSplit(size_t i, size_t num_samples_node,
+    std::vector<size_t>& num_samples_right_child,
+    std::vector<size_t>& delta_samples_at_risk_right_child,
+    std::vector<std::vector<size_t>>& num_deaths_right_child) {
+
+  // Stop if minimal bucket size reached
+  size_t num_samples_left_child = num_samples_node - num_samples_right_child[i];
+  if (num_samples_right_child[i] < (*min_bucket)[0] || num_samples_left_child < (*min_bucket)[0]) {
+    return -1;
+  }
+
+  // Composite log-rank across event types
+  double composite = 0;
+  for (size_t e = 0; e < num_event_types; ++e) {
+    double numerator = 0;
+    double denominator_squared = 0;
+
+    size_t num_samples_at_risk_right_child_e = num_samples_right_child[i];
+    for (size_t t = 0; t < num_timepoints; ++t) {
+      if (num_samples_at_risk[t] < 2 || num_samples_at_risk_right_child_e < 1) {
+        break;
+      }
+
+      if (num_deaths[e][t] > 0) {
+        double di = (double) num_deaths[e][t];
+        double di1 = (double) num_deaths_right_child[e][i * num_timepoints + t];
+        double Yi = (double) num_samples_at_risk[t];
+        double Yi1 = (double) num_samples_at_risk_right_child_e;
+        numerator += di1 - Yi1 * (di / Yi);
+        denominator_squared += (Yi1 / Yi) * (1.0 - Yi1 / Yi) * ((Yi - di) / (Yi - 1)) * di;
+      }
+
+      // Reduce number of samples at risk for next timepoint (shared across event types)
+      num_samples_at_risk_right_child_e -= delta_samples_at_risk_right_child[i * num_timepoints + t];
+    }
+
+    if (denominator_squared > 0) {
+      double z_e = numerator / sqrt(denominator_squared);
+      double w = (cause_weights != nullptr) ? (*cause_weights)[e] : 1.0;
+      composite += w * z_e * z_e;
+    }
+  }
+
+  return (composite > 0) ? sqrt(composite) : -1;
+}
+
+double TreeSurvival::computeLogRankUnorderedSplit(size_t num_samples_node,
+    size_t num_samples_right_child_count,
+    std::vector<size_t>& delta_samples_at_risk_right_child,
+    std::vector<size_t>& num_deaths_right_child_flat) {
+
+  // Stop if minimal bucket size reached
+  size_t num_samples_left_child = num_samples_node - num_samples_right_child_count;
+  if (num_samples_right_child_count < (*min_bucket)[0] || num_samples_left_child < (*min_bucket)[0]) {
+    return -1;
+  }
+
+  // For unordered splits, num_deaths_right_child_flat is flat: [e * num_timepoints + t]
+  double composite = 0;
+  for (size_t e = 0; e < num_event_types; ++e) {
+    double numerator = 0;
+    double denominator_squared = 0;
+
+    size_t num_samples_at_risk_right_child_e = num_samples_right_child_count;
+    for (size_t t = 0; t < num_timepoints; ++t) {
+      if (num_samples_at_risk[t] < 2 || num_samples_at_risk_right_child_e < 1) {
+        break;
+      }
+
+      if (num_deaths[e][t] > 0) {
+        double di = (double) num_deaths[e][t];
+        double di1 = (double) num_deaths_right_child_flat[e * num_timepoints + t];
+        double Yi = (double) num_samples_at_risk[t];
+        double Yi1 = (double) num_samples_at_risk_right_child_e;
+        numerator += di1 - Yi1 * (di / Yi);
+        denominator_squared += (Yi1 / Yi) * (1.0 - Yi1 / Yi) * ((Yi - di) / (Yi - 1)) * di;
+      }
+
+      num_samples_at_risk_right_child_e -= delta_samples_at_risk_right_child[t];
+    }
+
+    if (denominator_squared > 0) {
+      double z_e = numerator / sqrt(denominator_squared);
+      double w = (cause_weights != nullptr) ? (*cause_weights)[e] : 1.0;
+      composite += w * z_e * z_e;
+    }
+  }
+
+  return (composite > 0) ? sqrt(composite) : -1;
 }
 
 void TreeSurvival::findBestSplitValueLogRank(size_t nodeID, size_t varID, double& best_value, size_t& best_varID,
@@ -400,7 +510,7 @@ void TreeSurvival::findBestSplitValueLogRank(size_t nodeID, size_t varID, double
   size_t num_splits = possible_split_values.size() - 1;
 
   // Initialize
-  std::vector<size_t> num_deaths_right_child(num_splits * num_timepoints);
+  std::vector<std::vector<size_t>> num_deaths_right_child(num_event_types, std::vector<size_t>(num_splits * num_timepoints, 0));
   std::vector<size_t> delta_samples_at_risk_right_child(num_splits * num_timepoints);
   std::vector<size_t> num_samples_right_child(num_splits);
 
@@ -409,40 +519,8 @@ void TreeSurvival::findBestSplitValueLogRank(size_t nodeID, size_t varID, double
 
   // Compute logrank test for all splits and use best
   for (size_t i = 0; i < num_splits; ++i) {
-    double numerator = 0;
-    double denominator_squared = 0;
-
-    // Stop if minimal bucket size reached
-    size_t num_samples_left_child = num_samples_node - num_samples_right_child[i];
-    if (num_samples_right_child[i] < (*min_bucket)[0] || num_samples_left_child < (*min_bucket)[0]) {
-      continue;
-    }
-
-    // Compute logrank test statistic for this split
-    size_t num_samples_at_risk_right_child = num_samples_right_child[i];
-    for (size_t t = 0; t < num_timepoints; ++t) {
-      if (num_samples_at_risk[t] < 2 || num_samples_at_risk_right_child < 1) {
-        break;
-      }
-
-      if (num_deaths[t] > 0) {
-        // Numerator and demoninator for log-rank test, notation from Ishwaran et al.
-        double di = (double) num_deaths[t];
-        double di1 = (double) num_deaths_right_child[i * num_timepoints + t];
-        double Yi = (double) num_samples_at_risk[t];
-        double Yi1 = (double) num_samples_at_risk_right_child;
-        numerator += di1 - Yi1 * (di / Yi);
-        denominator_squared += (Yi1 / Yi) * (1.0 - Yi1 / Yi) * ((Yi - di) / (Yi - 1)) * di;
-      }
-
-      // Reduce number of samples at risk for next timepoint
-      num_samples_at_risk_right_child -= delta_samples_at_risk_right_child[i * num_timepoints + t];
-
-    }
-    double logrank = -1;
-    if (denominator_squared != 0) {
-      logrank = fabs(numerator / sqrt(denominator_squared));
-    }
+    double logrank = computeLogRankSplit(i, num_samples_node, num_samples_right_child,
+        delta_samples_at_risk_right_child, num_deaths_right_child);
 
     // Regularization
     regularize(logrank, varID);
@@ -492,12 +570,10 @@ void TreeSurvival::findBestSplitValueLogRankUnordered(size_t nodeID, size_t varI
       }
     }
 
-    // Initialize
-    std::vector<size_t> num_deaths_right_child(num_timepoints);
-    std::vector<size_t> delta_samples_at_risk_right_child(num_timepoints);
+    // Initialize: flat layout [event_type * num_timepoints + t]
+    std::vector<size_t> num_deaths_right_child(num_event_types * num_timepoints, 0);
+    std::vector<size_t> delta_samples_at_risk_right_child(num_timepoints, 0);
     size_t num_samples_right_child = 0;
-    double numerator = 0;
-    double denominator_squared = 0;
 
     // Count deaths in right child per timepoint
     for (size_t pos = start_pos[nodeID]; pos < end_pos[nodeID]; ++pos) {
@@ -507,47 +583,19 @@ void TreeSurvival::findBestSplitValueLogRankUnordered(size_t nodeID, size_t varI
       size_t factorID = floor(value) - 1;
 
       // If in right child, count
-      // In right child, if bitwise splitID at position factorID is 1
       if ((splitID & (1ULL << factorID))) {
         ++num_samples_right_child;
         ++delta_samples_at_risk_right_child[survival_timeID];
-        if (data->get_y(sampleID, 1) == 1) {
-          ++num_deaths_right_child[survival_timeID];
+        double status = data->get_y(sampleID, 1);
+        if (status > 0) {
+          size_t event_type = (size_t) status - 1;
+          ++num_deaths_right_child[event_type * num_timepoints + survival_timeID];
         }
       }
-
     }
 
-    // Stop if minimal bucket size reached
-    size_t num_samples_left_child = num_samples_node - num_samples_right_child;
-    if (num_samples_right_child < (*min_bucket)[0] || num_samples_left_child < (*min_bucket)[0]) {
-      continue;
-    }
-
-    // Compute logrank test statistic for this split
-    size_t num_samples_at_risk_right_child = num_samples_right_child;
-    for (size_t t = 0; t < num_timepoints; ++t) {
-      if (num_samples_at_risk[t] < 2 || num_samples_at_risk_right_child < 1) {
-        break;
-      }
-
-      if (num_deaths[t] > 0) {
-        // Numerator and demoninator for log-rank test, notation from Ishwaran et al.
-        double di = (double) num_deaths[t];
-        double di1 = (double) num_deaths_right_child[t];
-        double Yi = (double) num_samples_at_risk[t];
-        double Yi1 = (double) num_samples_at_risk_right_child;
-        numerator += di1 - Yi1 * (di / Yi);
-        denominator_squared += (Yi1 / Yi) * (1.0 - Yi1 / Yi) * ((Yi - di) / (Yi - 1)) * di;
-      }
-
-      // Reduce number of samples at risk for next timepoint
-      num_samples_at_risk_right_child -= delta_samples_at_risk_right_child[t];
-    }
-    double logrank = -1;
-    if (denominator_squared != 0) {
-      logrank = fabs(numerator / sqrt(denominator_squared));
-    }
+    double logrank = computeLogRankUnorderedSplit(num_samples_node, num_samples_right_child,
+        delta_samples_at_risk_right_child, num_deaths_right_child);
 
     // Regularization
     regularize(logrank, varID);
@@ -791,7 +839,7 @@ void TreeSurvival::findBestSplitValueExtraTrees(size_t nodeID, size_t varID, dou
   size_t num_splits = possible_split_values.size();
 
   // Initialize
-  std::vector<size_t> num_deaths_right_child(num_splits * num_timepoints);
+  std::vector<std::vector<size_t>> num_deaths_right_child(num_event_types, std::vector<size_t>(num_splits * num_timepoints, 0));
   std::vector<size_t> delta_samples_at_risk_right_child(num_splits * num_timepoints);
   std::vector<size_t> num_samples_right_child(num_splits);
 
@@ -800,40 +848,8 @@ void TreeSurvival::findBestSplitValueExtraTrees(size_t nodeID, size_t varID, dou
 
   // Compute logrank test for all splits and use best
   for (size_t i = 0; i < num_splits; ++i) {
-    double numerator = 0;
-    double denominator_squared = 0;
-
-    // Stop if minimal node size reached
-    size_t num_samples_left_child = num_samples_node - num_samples_right_child[i];
-    if (num_samples_right_child[i] < (*min_bucket)[0] || num_samples_left_child < (*min_bucket)[0]) {
-      continue;
-    }
-
-    // Compute logrank test statistic for this split
-    size_t num_samples_at_risk_right_child = num_samples_right_child[i];
-    for (size_t t = 0; t < num_timepoints; ++t) {
-      if (num_samples_at_risk[t] < 2 || num_samples_at_risk_right_child < 1) {
-        break;
-      }
-
-      if (num_deaths[t] > 0) {
-        // Numerator and demoninator for log-rank test, notation from Ishwaran et al.
-        double di = (double) num_deaths[t];
-        double di1 = (double) num_deaths_right_child[i * num_timepoints + t];
-        double Yi = (double) num_samples_at_risk[t];
-        double Yi1 = (double) num_samples_at_risk_right_child;
-        numerator += di1 - Yi1 * (di / Yi);
-        denominator_squared += (Yi1 / Yi) * (1.0 - Yi1 / Yi) * ((Yi - di) / (Yi - 1)) * di;
-      }
-
-      // Reduce number of samples at risk for next timepoint
-      num_samples_at_risk_right_child -= delta_samples_at_risk_right_child[i * num_timepoints + t];
-
-    }
-    double logrank = -1;
-    if (denominator_squared != 0) {
-      logrank = fabs(numerator / sqrt(denominator_squared));
-    }
+    double logrank = computeLogRankSplit(i, num_samples_node, num_samples_right_child,
+        delta_samples_at_risk_right_child, num_deaths_right_child);
 
     // Regularization
     regularize(logrank, varID);
@@ -906,12 +922,10 @@ void TreeSurvival::findBestSplitValueExtraTreesUnordered(size_t nodeID, size_t v
       splitID |= 1ULL << idx;
     }
 
-    // Initialize
-    std::vector<size_t> num_deaths_right_child(num_timepoints);
-    std::vector<size_t> delta_samples_at_risk_right_child(num_timepoints);
+    // Initialize: flat layout [event_type * num_timepoints + t]
+    std::vector<size_t> num_deaths_right_child(num_event_types * num_timepoints, 0);
+    std::vector<size_t> delta_samples_at_risk_right_child(num_timepoints, 0);
     size_t num_samples_right_child = 0;
-    double numerator = 0;
-    double denominator_squared = 0;
 
     // Count deaths in right child per timepoint
     for (size_t pos = start_pos[nodeID]; pos < end_pos[nodeID]; ++pos) {
@@ -921,47 +935,19 @@ void TreeSurvival::findBestSplitValueExtraTreesUnordered(size_t nodeID, size_t v
       size_t factorID = floor(value) - 1;
 
       // If in right child, count
-      // In right child, if bitwise splitID at position factorID is 1
       if ((splitID & (1ULL << factorID))) {
         ++num_samples_right_child;
         ++delta_samples_at_risk_right_child[survival_timeID];
-        if (data->get_y(sampleID, 1) == 1) {
-          ++num_deaths_right_child[survival_timeID];
+        double status = data->get_y(sampleID, 1);
+        if (status > 0) {
+          size_t event_type = (size_t) status - 1;
+          ++num_deaths_right_child[event_type * num_timepoints + survival_timeID];
         }
       }
-
     }
 
-    // Stop if minimal node size reached
-    size_t num_samples_left_child = num_samples_node - num_samples_right_child;
-    if (num_samples_right_child < (*min_bucket)[0] || num_samples_left_child < (*min_bucket)[0]) {
-      continue;
-    }
-
-    // Compute logrank test statistic for this split
-    size_t num_samples_at_risk_right_child = num_samples_right_child;
-    for (size_t t = 0; t < num_timepoints; ++t) {
-      if (num_samples_at_risk[t] < 2 || num_samples_at_risk_right_child < 1) {
-        break;
-      }
-
-      if (num_deaths[t] > 0) {
-        // Numerator and demoninator for log-rank test, notation from Ishwaran et al.
-        double di = (double) num_deaths[t];
-        double di1 = (double) num_deaths_right_child[t];
-        double Yi = (double) num_samples_at_risk[t];
-        double Yi1 = (double) num_samples_at_risk_right_child;
-        numerator += di1 - Yi1 * (di / Yi);
-        denominator_squared += (Yi1 / Yi) * (1.0 - Yi1 / Yi) * ((Yi - di) / (Yi - 1)) * di;
-      }
-
-      // Reduce number of samples at risk for next timepoint
-      num_samples_at_risk_right_child -= delta_samples_at_risk_right_child[t];
-    }
-    double logrank = -1;
-    if (denominator_squared != 0) {
-      logrank = fabs(numerator / sqrt(denominator_squared));
-    }
+    double logrank = computeLogRankUnorderedSplit(num_samples_node, num_samples_right_child,
+        delta_samples_at_risk_right_child, num_deaths_right_child);
 
     // Regularization
     regularize(logrank, varID);

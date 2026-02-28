@@ -31,6 +31,46 @@ integer.to.factor <- function(x, labels) {
   factor(x, levels = seq_along(labels), labels = labels)
 }
 
+# Compute cumulative incidence functions from cause-specific CHFs
+# using the Aalen-Johansen estimator
+# chf_list: list of K matrices (n x num_timepoints), each containing cause-specific CHF
+# Returns: list of K matrices (n x num_timepoints), each containing CIF
+compute_cif <- function(chf_list, num_event_types, num_timepoints) {
+  n <- nrow(chf_list[[1]])
+
+  # Extract cause-specific hazard increments from cumulative hazard
+  # h_e(t) = CHF_e(t) - CHF_e(t-1)
+  hazard_list <- lapply(chf_list, function(chf_mat) {
+    h <- chf_mat
+    if (num_timepoints > 1) {
+      h[, 2:num_timepoints] <- chf_mat[, 2:num_timepoints] - chf_mat[, 1:(num_timepoints - 1)]
+    }
+    h
+  })
+
+  # Overall hazard at each time: sum across event types
+  overall_hazard <- Reduce("+", hazard_list)
+
+  # Compute event-free survival: S(t) = prod(1 - overall_hazard(s), s <= t)
+  # S(t-) = S(t-1) for t > 1, S(0-) = 1
+  one_minus_h <- 1 - overall_hazard
+  surv <- t(apply(one_minus_h, 1, cumprod))
+  if (!is.matrix(surv)) surv <- matrix(surv, nrow = 1)
+
+  # S(t-1): shift right, with S(0-) = 1
+  surv_prev <- cbind(1, surv[, -num_timepoints, drop = FALSE])
+
+  # CIF_e(t) = sum_{s<=t} S(s-) * h_e(s)
+  cif_list <- lapply(hazard_list, function(h) {
+    cif_increments <- surv_prev * h
+    cif <- t(apply(cif_increments, 1, cumsum))
+    if (!is.matrix(cif)) cif <- matrix(cif, nrow = 1)
+    cif
+  })
+
+  cif_list
+}
+
 # Save version of sample() for length(x) == 1
 # See help(sample)
 save.sample <- function(x, ...) {

@@ -177,6 +177,10 @@ Rcpp::List rangerCpp(uint treetype, Rcpp::NumericMatrix& input_x, Rcpp::NumericM
         std::vector<std::vector<std::vector<double>> > chf = loaded_forest["chf"];
         std::vector<double> unique_timepoints = loaded_forest["unique.death.times"];
         auto& temp = dynamic_cast<ForestSurvival&>(*forest);
+        if (loaded_forest.containsElementNamed("num.event.types")) {
+          size_t loaded_num_event_types = loaded_forest["num.event.types"];
+          temp.setNumEventTypes(loaded_num_event_types);
+        }
         temp.loadForest(num_trees, child_nodeIDs, split_varIDs, split_values, chf,
             unique_timepoints, is_ordered);
       } else if (treetype == TREE_PROBABILITY) {
@@ -232,6 +236,7 @@ Rcpp::List rangerCpp(uint treetype, Rcpp::NumericMatrix& input_x, Rcpp::NumericM
     if (treetype == TREE_SURVIVAL) {
       auto& temp = dynamic_cast<ForestSurvival&>(*forest);
       result.push_back(temp.getUniqueTimepoints(), "unique.death.times");
+      result.push_back(temp.getNumEventTypes(), "num.event.types");
     }
     if (!prediction_mode) {
       result.push_back(forest->getMtry(), "mtry");
@@ -287,6 +292,7 @@ Rcpp::List rangerCpp(uint treetype, Rcpp::NumericMatrix& input_x, Rcpp::NumericM
         auto& temp = dynamic_cast<ForestSurvival&>(*forest);
         forest_object.push_back(temp.getChf(), "chf");
         forest_object.push_back(temp.getUniqueTimepoints(), "unique.death.times");
+        forest_object.push_back(temp.getNumEventTypes(), "num.event.types");
       }
       result.push_back(forest_object, "forest");
     }

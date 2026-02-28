@@ -297,7 +297,17 @@ ranger <- function(formula = NULL, data = NULL, num.trees = 500, mtry = NULL,
           y <- data[, dependent.variable.name, drop = TRUE]
           x <- data[, !(colnames(data) %in% dependent.variable.name), drop = FALSE]
         } else {
-          y <- survival::Surv(data[, dependent.variable.name], data[, status.variable.name]) 
+          status_vals <- data[, status.variable.name]
+          ## Validate status values before creating Surv object
+          max_status <- max(status_vals)
+          if (max_status >= 1 && !all(status_vals %in% 0:max_status)) {
+            stop("Error: Status values must be 0 (censored) or consecutive integers 1, 2, ..., K for K event types.")
+          }
+          if (max_status > 1) {
+            y <- survival::Surv(data[, dependent.variable.name], status_vals, type = "mstate")
+          } else {
+            y <- survival::Surv(data[, dependent.variable.name], status_vals)
+          }
           x <- data[, !(colnames(data) %in% c(dependent.variable.name, status.variable.name)), drop = FALSE]
         }
       }
@@ -309,10 +319,33 @@ ranger <- function(formula = NULL, data = NULL, num.trees = 500, mtry = NULL,
       if (ncol(data) > 10000) {
         warning("Avoid the formula interface for high-dimensional data. If ranger is slow or you get a 'protection stack overflow' error, consider the x/y or dependent.variable.name interface (see examples).")
       }
+      ## Check if formula involves Surv() with potential competing risks status
+      ## If so, pre-detect and modify the call to use type = "mstate"
+      all_formula_vars <- all.vars(formula)
+      dependent.variable.name <- all_formula_vars[1]
+      lhs <- formula[[2]]
+      is_surv_call <- is.call(lhs) && as.character(lhs[[1]]) == "Surv"
+
+      if (is_surv_call && length(all_formula_vars) >= 2) {
+        status_var <- all_formula_vars[2]
+        if (status_var %in% colnames(data)) {
+          raw_status <- data[, status_var]
+          max_status <- max(raw_status)
+          ## Validate status values before creating Surv object
+          if (max_status >= 1 && !all(raw_status %in% 0:max_status)) {
+            stop("Error: Status values must be 0 (censored) or consecutive integers 1, 2, ..., K for K event types.")
+          }
+          if (max_status > 1) {
+            ## Modify formula LHS to use Surv(..., type = "mstate")
+            lhs[["type"]] <- "mstate"
+            formula[[2]] <- lhs
+          }
+        }
+      }
+
       data.selected <- parse.formula(formula, data, env = parent.frame())
-      dependent.variable.name <- all.vars(formula)[1]
       if (inherits(data.selected[, 1], "Surv")) {
-        status.variable.name <- all.vars(formula)[2]
+        status.variable.name <- all_formula_vars[2]
       }
       y <- data.selected[, 1]
       x <- data.selected[, -1, drop = FALSE]
@@ -1007,10 +1040,19 @@ ranger <- function(formula = NULL, data = NULL, num.trees = 500, mtry = NULL,
     order.snps <- FALSE
   }
   
-  ## No competing risks check
+  ## Competing risks: detect number of event types
+  num.event.types <- 1L
   if (treetype == 5) {
-    if (!all(y.mat[, 2] %in% 0:1)) {
-      stop("Error: Competing risks not supported yet. Use status=1 for events and status=0 for censoring.")
+    status_vals <- y.mat[, 2]
+    num.event.types <- as.integer(max(status_vals))
+    if (num.event.types < 1) {
+      stop("Error: No events in survival data. All status values are 0.")
+    }
+    if (!all(status_vals %in% 0:num.event.types)) {
+      stop("Error: Status values must be 0 (censored) or consecutive integers 1, 2, ..., K for K event types.")
+    }
+    if (num.event.types > 1 && splitrule.num %in% c(2, 3)) {
+      stop("Error: C-index (AUC) splitting not supported for competing risks. Use 'logrank', 'extratrees', or 'maxstat'.")
     }
   }
   
@@ -1063,13 +1105,35 @@ ranger <- function(formula = NULL, data = NULL, num.trees = 500, mtry = NULL,
   } else if (treetype == 5 && oob.error) {
     if (is.list(result$predictions)) {
       result$predictions <- do.call(rbind, result$predictions)
-    } 
+    }
     if (is.vector(result$predictions)) {
       result$predictions <- matrix(result$predictions, nrow = 1)
     }
-    result$chf <- result$predictions
-    result$predictions <- NULL
-    result$survival <- exp(-result$chf)
+
+    num.event.types.result <- result$num.event.types
+    if (is.null(num.event.types.result) || num.event.types.result <= 1) {
+      # Standard single-event survival
+      result$chf <- result$predictions
+      result$predictions <- NULL
+      result$survival <- exp(-result$chf)
+    } else {
+      # Competing risks: predictions matrix has num_event_types * num_timepoints columns
+      num.timepoints <- length(result$unique.death.times)
+      n <- nrow(result$predictions)
+
+      # Split into per-event-type CHF matrices
+      result$chf <- lapply(seq_len(num.event.types.result), function(e) {
+        cols <- ((e - 1) * num.timepoints + 1):(e * num.timepoints)
+        result$predictions[, cols, drop = FALSE]
+      })
+
+      # Compute CIF using Aalen-Johansen estimator
+      result$cif <- compute_cif(result$chf, num.event.types.result, num.timepoints)
+
+      result$predictions <- NULL
+      # Overall event-free survival: product of (1 - sum of cause-specific hazards) over time
+      # Not stored as $survival for competing risks since it's ambiguous
+    }
   } else if (treetype == 9 && oob.error) {
     if (is.list(result$predictions)) {
       result$predictions <- do.call(rbind, result$predictions)
@@ -1120,6 +1184,9 @@ ranger <- function(formula = NULL, data = NULL, num.trees = 500, mtry = NULL,
     }
     result$forest$independent.variable.names <- independent.variable.names
     result$forest$treetype <- result$treetype
+    if (treetype == 5) {
+      result$forest$num.event.types <- num.event.types
+    }
     class(result$forest) <- "ranger.forest"
     
     ## Save covariate levels
@@ -1128,6 +1195,11 @@ ranger <- function(formula = NULL, data = NULL, num.trees = 500, mtry = NULL,
     }
   }
   
+  ## Number of event types (for competing risks)
+  if (treetype == 5) {
+    result$num.event.types <- num.event.types
+  }
+
   ## Dependent (and status) variable name
   ## will be NULL only when x/y interface is used
   result$dependent.variable.name <- dependent.variable.name

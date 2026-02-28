@@ -323,9 +323,35 @@ predict.ranger.forest <- function(object, data, predict.all = FALSE,
       ## Empty
     } else if (forest$treetype == "Survival") {
       result$unique.death.times <- forest$unique.death.times
-      result$chf <- result$predictions
-      result$predictions <- NULL
-      result$survival <- exp(-result$chf)
+      num.event.types <- forest$num.event.types
+      if (is.null(num.event.types) || num.event.types <= 1) {
+        result$chf <- result$predictions
+        result$predictions <- NULL
+        result$survival <- exp(-result$chf)
+      } else {
+        num.timepoints <- length(forest$unique.death.times)
+        if (predict.all) {
+          # predict.all: predictions is 3d array (sample x (event*time) x tree)
+          result$chf <- lapply(seq_len(num.event.types), function(e) {
+            cols <- ((e - 1) * num.timepoints + 1):(e * num.timepoints)
+            result$predictions[, cols, , drop = FALSE]
+          })
+        } else {
+          # Standard prediction: matrix (sample x (event*time))
+          result$chf <- lapply(seq_len(num.event.types), function(e) {
+            cols <- ((e - 1) * num.timepoints + 1):(e * num.timepoints)
+            result$predictions[, cols, drop = FALSE]
+          })
+        }
+        result$cif <- compute_cif(
+          lapply(result$chf, function(m) {
+            if (length(dim(m)) == 3) apply(m, c(1, 2), mean) else m
+          }),
+          num.event.types, num.timepoints
+        )
+        result$predictions <- NULL
+        result$num.event.types <- num.event.types
+      }
     } else if (forest$treetype == "Probability estimation") {
       if (predict.all) {
         ## Set colnames and sort by levels

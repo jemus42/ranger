@@ -21,12 +21,13 @@ namespace ranger {
 
 class TreeSurvival: public Tree {
 public:
-  TreeSurvival(std::vector<double>* unique_timepoints, std::vector<size_t>* response_timepointIDs);
+  TreeSurvival(std::vector<double>* unique_timepoints, std::vector<size_t>* response_timepointIDs,
+      size_t num_event_types = 1, const std::vector<double>* cause_weights = nullptr);
 
   // Create from loaded forest
   TreeSurvival(std::vector<std::vector<size_t>>& child_nodeIDs, std::vector<size_t>& split_varIDs,
       std::vector<double>& split_values, std::vector<std::vector<double>> chf, std::vector<double>* unique_timepoints,
-      std::vector<size_t>* response_timepointIDs);
+      std::vector<size_t>* response_timepointIDs, size_t num_event_types = 1);
 
   TreeSurvival(const TreeSurvival&) = delete;
   TreeSurvival& operator=(const TreeSurvival&) = delete;
@@ -70,8 +71,17 @@ private:
 
   void computeDeathCounts(size_t nodeID);
   void computeChildDeathCounts(size_t nodeID, size_t varID, std::vector<double>& possible_split_values,
-      std::vector<size_t>& num_samples_right_child, std::vector<size_t>& num_samples_at_risk_right_child,
-      std::vector<size_t>& num_deaths_right_child, size_t num_splits);
+      std::vector<size_t>& num_samples_right_child, std::vector<size_t>& delta_samples_at_risk_right_child,
+      std::vector<std::vector<size_t>>& num_deaths_right_child, size_t num_splits);
+
+  double computeLogRankSplit(size_t i, size_t num_samples_node,
+      std::vector<size_t>& num_samples_right_child,
+      std::vector<size_t>& delta_samples_at_risk_right_child,
+      std::vector<std::vector<size_t>>& num_deaths_right_child);
+  double computeLogRankUnorderedSplit(size_t num_samples_node,
+      size_t num_samples_right_child,
+      std::vector<size_t>& delta_samples_at_risk_right_child,
+      std::vector<size_t>& num_deaths_right_child);
 
   void computeAucSplit(double time_k, double time_l, double status_k, double status_l, double value_k, double value_l,
       size_t num_splits, std::vector<double>& possible_split_values, std::vector<double>& num_count,
@@ -105,8 +115,13 @@ private:
   // For all terminal nodes CHF for all unique timepoints. For other nodes empty vector (except if save_node_stats).
   std::vector<std::vector<double>> chf;
 
+  // Number of competing event types (1 = standard survival)
+  size_t num_event_types;
+  const std::vector<double>* cause_weights;
+
   // Fields to save to while tree growing
-  std::vector<size_t> num_deaths;
+  // num_deaths[event_type][timepoint]
+  std::vector<std::vector<size_t>> num_deaths;
   std::vector<size_t> num_samples_at_risk;
 };
 
