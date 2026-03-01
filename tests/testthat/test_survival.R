@@ -8,9 +8,9 @@ context("ranger_surv")
 rg.surv <- ranger(Surv(time, status) ~ ., data = veteran, num.trees = 10)
 
 ## Basic tests (for all random forests equal)
-test_that("survival result is of class ranger with 19 elements", {
+test_that("survival result is of class ranger with 18 elements", {
   expect_is(rg.surv, "ranger")
-  expect_equal(length(rg.surv), 19)
+  expect_equal(length(rg.surv), 18)
 })
 
 test_that("results have right number of trees", {
@@ -119,11 +119,10 @@ test_that("Survival error without covariates", {
                "Error: No covariates found.")
 })
 
-test_that("Competing risk data works with y/x interface", {
-  sobj <- Surv(veteran$time, factor(sample(0:2, nrow(veteran), replace = TRUE)))
-  rf <- ranger(y = sobj, x = veteran[, 1:2], num.trees = 5)
-  expect_is(rf, "ranger")
-  expect_equal(rf$treetype, "Survival")
+test_that("Survival error for competing risk data", {
+  sobj <- Surv(veteran$time, factor(sample(1:3, nrow(veteran), replace = TRUE)))
+  expect_error(ranger(y = sobj, x = veteran[, 1:2], num.trees = 5), 
+               "Error: Competing risks not supported yet\\. Use status=1 for events and status=0 for censoring\\.")
 })
 
 test_that("Right unique time points without time.interest", {
